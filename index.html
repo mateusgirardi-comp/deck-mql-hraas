@@ -3312,8 +3312,8 @@ document.addEventListener('keydown', function(e) { if(e.key==='Escape') closeIma
         </button>
     </div>
 
-    <!-- html2canvas + jsPDF -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <!-- dom-to-image-more (SVG foreignObject — full browser CSS Grid/Flex) + jsPDF -->
+    <script src="https://cdn.jsdelivr.net/npm/dom-to-image-more@2.10.3/dist/dom-to-image-more.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 
     <script>
@@ -3347,7 +3347,7 @@ document.addEventListener('keydown', function(e) { if(e.key==='Escape') closeIma
         }
 
         async function exportPDF() {
-            if (!window.html2canvas || !window.jspdf) {
+            if (!window.domtoimage || !window.jspdf) {
                 alert('Bibliotecas PDF não carregaram. Faça Cmd+Shift+R e tente novamente.');
                 return;
             }
@@ -3365,43 +3365,45 @@ document.addEventListener('keydown', function(e) { if(e.key==='Escape') closeIma
             var html = document.documentElement;
             var body = document.body;
 
-            // ── 1. PRE-LOAD LOGOS via wsrv.nl (has CORS) ─────────────────────
-            // wsrv.nl proxies any image and adds Access-Control-Allow-Origin: *
-            // Fetch as blob → data URL → set img.src (data: URLs are same-origin)
+            // ── 1. PRE-LOAD ALL IMAGES AS DATA URLs ───────────────────────────
+            // dom-to-image-more uses SVG foreignObject which requires same-origin
+            // or CORS images. Convert everything to data: URLs first.
             progressEl.textContent = 'Carregando logos...';
             var imgRestores = [];
 
+            // Company logos via wsrv.nl proxy (adds CORS headers)
             var logoImgs = Array.from(document.querySelectorAll('img.logo-img, img.logo-img-sm'));
             await Promise.allSettled(logoImgs.map(async function(img) {
                 var domain = img.getAttribute('data-domain');
                 if (!domain) return;
                 var origSrc = img.src;
-                // Build target: t1.gstatic.com through wsrv.nl
                 var t1src = 't1.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://' + domain + '&size=256';
                 var proxied = wsrvUrl('https://' + t1src);
                 try {
                     var resp = await fetch(proxied, { signal: AbortSignal.timeout(8000) });
                     if (!resp.ok) throw new Error('status ' + resp.status);
                     var dataUrl = await blobToDataURL(await resp.blob());
-                    imgRestores.push({ img:img, src:origSrc });
+                    imgRestores.push({ img: img, src: origSrc });
                     img.src = dataUrl;
-                } catch(e) {
-                    // Proxy failed — leave original (will be blank in PDF, but no crash)
-                    console.warn('Logo proxy failed for', domain, e.message);
-                }
+                } catch(e) { console.warn('Logo proxy failed for', domain, e.message); }
             }));
 
-            // Also handle imgur images (they support CORS natively)
-            document.querySelectorAll('img[src*="imgur.com"]').forEach(function(img) {
-                if (img.crossOrigin !== 'anonymous') {
-                    imgRestores.push({ img:img, src:img.src, co:img.crossOrigin });
-                    img.crossOrigin = 'anonymous';
-                    var s = img.src; img.src = ''; img.src = s;
-                }
-            });
+            // Convert all remaining external images to data URLs via wsrv.nl
+            var otherImgs = Array.from(document.querySelectorAll('#deck img:not(.logo-img):not(.logo-img-sm)'));
+            await Promise.allSettled(otherImgs.map(async function(img) {
+                if (!img.src || img.src.startsWith('data:')) return;
+                var origSrc = img.src;
+                var proxied = wsrvUrl(origSrc);
+                try {
+                    var resp = await fetch(proxied, { signal: AbortSignal.timeout(8000) });
+                    if (!resp.ok) throw new Error('status ' + resp.status);
+                    var dataUrl = await blobToDataURL(await resp.blob());
+                    imgRestores.push({ img: img, src: origSrc });
+                    img.src = dataUrl;
+                } catch(e) { console.warn('Image proxy failed', origSrc, e.message); }
+            }));
 
             // ── 2. FORCE EXACT 1440×810 LAYOUT ───────────────────────────────
-            // Fixes distortion on non-16:9 screens (MacBook 3:2 ratio etc.)
             deck.style.transform = 'none';
             deck.style.width = W + 'px';
             deck.style.height = H + 'px';
@@ -3409,22 +3411,15 @@ document.addEventListener('keydown', function(e) { if(e.key==='Escape') closeIma
             html.style.width = W + 'px'; html.style.height = H + 'px'; html.style.overflow = 'hidden';
             body.style.width = W + 'px'; body.style.height = H + 'px'; body.style.overflow = 'hidden';
 
-            // ── 3. INJECT RENDER OVERRIDES ────────────────────────────────────
-            // Kill all animations in the live document so html2canvas sees final state
+            // ── 3. KILL ANIMATIONS + VIDEO ────────────────────────────────────
             var capStyle = document.createElement('style');
             capStyle.textContent =
-                '* { ' +
-                '  animation: none !important; ' +
-                '  transition: none !important; ' +
-                '  backdrop-filter: none !important; ' +
-                '  -webkit-backdrop-filter: none !important; ' +
-                '} ' +
-                'video { opacity: 0 !important; display: none !important; }';
+                '* { animation:none !important; transition:none !important; ' +
+                '    backdrop-filter:none !important; -webkit-backdrop-filter:none !important; } ' +
+                'video { display:none !important; }';
             document.head.appendChild(capStyle);
 
-            // Also strip animation from ALL inline styles in the live document
-            // html2canvas reads inline styles from the 'style' attribute string
-            // Save originals so we can restore them after capture
+            // Strip animation from inline style attributes and ensure opacity:1
             var styleRestores = [];
             document.querySelectorAll('[style]').forEach(function(el) {
                 var s = el.getAttribute('style') || '';
@@ -3437,11 +3432,11 @@ document.addEventListener('keydown', function(e) { if(e.key==='Escape') closeIma
                 }
             });
 
-            await new Promise(function(r){ setTimeout(r, 100); });
+            await new Promise(function(r){ setTimeout(r, 150); });
 
             // ── 4. CAPTURE EACH SLIDE ─────────────────────────────────────────
-            var CHROME = ['zoom-toolbar','pdf-loading','modal-overlay','team-modal-overlay','img-modal'];
-
+            // dom-to-image-more captures only #deck (chrome/nav are siblings
+            // outside the deck, so they're excluded automatically).
             try {
                 var pdf = new window.jspdf.jsPDF({ orientation:'landscape', unit:'px', format:[W, H] });
 
@@ -3449,11 +3444,8 @@ document.addEventListener('keydown', function(e) { if(e.key==='Escape') closeIma
                     progressEl.textContent = 'Slide ' + (i+1) + ' de ' + slides.length;
                     slides.forEach(function(s){ s.classList.remove('active'); });
                     slides[i].classList.add('active');
-                    await new Promise(function(r){ setTimeout(r, 300); });
 
-                    // ── Per-slide: re-run JS layout calculations ───────────
-                    // Slide 3 (index 2): recalculate center-arrow position
-                    // (initS3 only fires via navigate(), not our manual activation)
+                    // Slide 3: recalculate JS-positioned center arrow
                     if (i === 2) {
                         await new Promise(function(r) { requestAnimationFrame(function() {
                             var col = document.getElementById('s3-center-col');
@@ -3468,102 +3460,23 @@ document.addEventListener('keydown', function(e) { if(e.key==='Escape') closeIma
                         }); });
                     }
 
-                    // ── Per-slide: apply computed layout properties inline ─
-                    // html2canvas's layout engine may miss CSS-class flex/grid
-                    // and can't resolve fr units. Reading from live computed
-                    // styles (already at 1440×810) gives correct pixel values.
-                    var layoutRestores = [];
-                    deck.querySelectorAll('*').forEach(function(el) {
-                        var cs = window.getComputedStyle(el);
-                        var disp = cs.display;
-                        var inlineChanges = {};
+                    // Let the browser render the active slide before capture
+                    await new Promise(function(r){ setTimeout(r, 200); });
 
-                        if (disp === 'flex' || disp === 'inline-flex') {
-                            if (!el.style.display)          inlineChanges.display         = disp;
-                            if (!el.style.flexDirection)    inlineChanges.flexDirection    = cs.flexDirection;
-                            if (!el.style.alignItems)       inlineChanges.alignItems       = cs.alignItems;
-                            if (!el.style.justifyContent)   inlineChanges.justifyContent   = cs.justifyContent;
-                            if (!el.style.flexWrap)         inlineChanges.flexWrap         = cs.flexWrap;
-                            if (!el.style.gap)              inlineChanges.gap              = cs.gap;
-                        }
-                        if (disp === 'grid' || disp === 'inline-grid') {
-                            if (!el.style.display)          inlineChanges.display          = disp;
-                            // getComputedStyle returns resolved px values (no fr units)
-                            inlineChanges.gridTemplateColumns = cs.gridTemplateColumns;
-                            inlineChanges.gridTemplateRows    = cs.gridTemplateRows;
-                            if (!el.style.alignItems)       inlineChanges.alignItems       = cs.alignItems;
-                            if (!el.style.gap)              inlineChanges.gap              = cs.gap;
-                        }
-
-                        if (Object.keys(inlineChanges).length) {
-                            var restore = { el: el, props: {} };
-                            Object.keys(inlineChanges).forEach(function(p) {
-                                restore.props[p] = el.style[p];
-                                el.style[p] = inlineChanges[p];
-                            });
-                            layoutRestores.push(restore);
-                        }
-                    });
-
-                    var canvas = await html2canvas(deck, {
+                    var canvas = await window.domtoimage.toCanvas(deck, {
+                        width: W,
+                        height: H,
                         scale: 2,
-                        useCORS: true,
-                        allowTaint: false,
-                        backgroundColor: '#ffffff',
-                        width: W, height: H,
-                        windowWidth: W, windowHeight: H,
-                        x: 0, y: 0, scrollX: 0, scrollY: 0,
-                        logging: false,
-                        imageTimeout: 15000,
-                        onclone: function(doc) {
-                            // ── A. Global CSS — kill all animations ──────────
-                            var s = doc.createElement('style');
-                            s.textContent =
-                                '* { animation:none !important; transition:none !important; ' +
-                                'backdrop-filter:none !important; -webkit-backdrop-filter:none !important; } ' +
-                                'video { opacity:0 !important; display:none !important; }';
-                            doc.head.appendChild(s);
-
-                            // ── B. Strip animation from inline style ATTRIBUTES ─
-                            // html2canvas reads from el.getAttribute('style'), not
-                            // el.style CSSOM — so setAttribute is the reliable path.
-                            doc.querySelectorAll('[style]').forEach(function(el) {
-                                var styleStr = el.getAttribute('style') || '';
-                                if (styleStr.indexOf('animation') !== -1) {
-                                    styleStr = styleStr.replace(/animation\s*:[^;]*(;|$)/gi, '');
-                                    styleStr = styleStr.replace(/opacity\s*:\s*[^;]*(;|$)/gi, '');
-                                    styleStr += '; opacity:1;';
-                                    el.setAttribute('style', styleStr);
-                                }
-                            });
-
-                            // ── C. Hide ALL fixed chrome ──────────────────────
-                            // (a) Nav bar uses Tailwind class 'fixed', not inline style
-                            doc.querySelectorAll('.fixed').forEach(function(el) {
-                                // Only hide chrome outside slides
-                                var p = el.parentElement;
-                                var inSlide = false;
-                                while (p) { if (p.classList && p.classList.contains('slide')) { inSlide = true; break; } p = p.parentElement; }
-                                if (!inSlide) el.style.display = 'none';
-                            });
-                            // (b) Nav arrows have inline position:fixed
-                            doc.querySelectorAll('[style*="position:fixed"],[style*="position: fixed"]').forEach(function(el){ el.style.display = 'none'; });
-                            // (c) Known chrome by ID
-                            ['zoom-toolbar','pdf-loading','modal-overlay','team-modal-overlay','img-modal'].forEach(function(id){
-                                var el = doc.getElementById(id); if (el) el.style.display = 'none';
-                            });
-                            // (d) Nav arrows by onclick
-                            doc.querySelectorAll('[onclick*="navigate"]').forEach(function(el){ el.style.display = 'none'; });
+                        bgcolor: '#ffffff',
+                        style: {
+                            transform: 'none',
+                            width: W + 'px',
+                            height: H + 'px'
                         }
-                    });
-
-                    // Restore per-slide layout overrides
-                    layoutRestores.forEach(function(r) {
-                        Object.keys(r.props).forEach(function(p) { r.el.style[p] = r.props[p]; });
                     });
 
                     if (i > 0) pdf.addPage([W, H], 'landscape');
-                    pdf.addImage(canvas.toDataURL('image/jpeg', 0.93), 'JPEG', 0, 0, W, H, '', 'FAST');
+                    pdf.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, W, H, '', 'FAST');
                 }
 
                 pdf.save('HRaaS-Comp.pdf');
@@ -3587,7 +3500,6 @@ document.addEventListener('keydown', function(e) { if(e.key==='Escape') closeIma
 
             capStyle.remove();
 
-            // Restore original inline styles (animations etc.)
             styleRestores.forEach(function(r){ r.el.setAttribute('style', r.orig); });
 
             imgRestores.forEach(function(r){
