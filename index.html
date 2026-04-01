@@ -1592,10 +1592,139 @@
         }
     </style>
 
+
     <style>
         /* Auto-scale for large screens */
         #deck {
             transform-origin: center center;
+        }
+    </style>
+
+    <style>
+        /* === ZOOM TOOLBAR === */
+        #zoom-toolbar {
+            position: fixed;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 9998;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            background: rgba(255,255,255,0.92);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(0,0,0,0.08);
+            border-radius: 100px;
+            padding: 8px 14px;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.12), 0 1px 4px rgba(0,0,0,0.06);
+            font-family: igualFont, Arial, sans-serif;
+            transition: opacity 0.3s;
+        }
+        #zoom-toolbar button {
+            background: none;
+            border: none;
+            cursor: pointer;
+            padding: 4px 8px;
+            border-radius: 50px;
+            font-size: 16px;
+            color: #374151;
+            transition: background 0.15s, color 0.15s;
+            line-height: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        #zoom-toolbar button:hover {
+            background: #f3f4f6;
+            color: #F4364C;
+        }
+        #zoom-label {
+            font-size: 12px;
+            font-weight: 600;
+            color: #374151;
+            min-width: 40px;
+            text-align: center;
+            letter-spacing: 0.02em;
+        }
+        .zoom-divider {
+            width: 1px;
+            height: 18px;
+            background: #e5e7eb;
+            margin: 0 2px;
+        }
+        #pdf-btn {
+            background: #F4364C !important;
+            color: #fff !important;
+            border-radius: 50px !important;
+            padding: 5px 14px !important;
+            font-size: 12px !important;
+            font-weight: 600 !important;
+            letter-spacing: 0.03em;
+            gap: 5px;
+        }
+        #pdf-btn:hover {
+            background: #d42d42 !important;
+            color: #fff !important;
+        }
+        #pdf-btn svg { flex-shrink: 0; }
+
+        /* === PRINT / PDF === */
+        @media print {
+            @page {
+                size: 1440px 810px landscape;
+                margin: 0;
+            }
+
+            /* Hide ALL UI chrome */
+            #zoom-toolbar,
+            [onclick*="navigate"],
+            [style*="position:fixed"][style*="left:0"],
+            [style*="position:fixed"][style*="right:0"],
+            .fixed.top-6 {
+                display: none !important;
+            }
+
+            /* Reset body/html */
+            html, body {
+                width: 1440px !important;
+                height: 810px !important;
+                overflow: hidden !important;
+                background: white !important;
+            }
+
+            /* Reset deck transform */
+            #deck {
+                transform: none !important;
+                width: 1440px !important;
+                height: 810px !important;
+                position: relative !important;
+            }
+
+            /* Show ALL slides, each on its own page */
+            .slide {
+                display: flex !important;
+                position: absolute !important;
+                width: 1440px !important;
+                height: 810px !important;
+                top: 0 !important;
+                left: 0 !important;
+                page-break-after: always;
+                break-after: page;
+            }
+
+            /* Prevent orphan pages */
+            .slide:last-child {
+                page-break-after: avoid;
+                break-after: avoid;
+            }
+
+            /* Hide modals */
+            #modal-overlay,
+            #team-modal-overlay,
+            #img-modal {
+                display: none !important;
+            }
         }
     </style>
 
@@ -2871,24 +3000,26 @@
         });
     
 
-        // Auto-scale deck for large screens
+        // Auto-scale deck for large screens (+ user zoom)
         function scaleDeck() {
             const deck = document.getElementById('deck');
             const baseWidth = 1440; // designed for this width
             const vw = window.innerWidth;
             const vh = window.innerHeight;
-            
+            const zoom = (typeof userZoom !== 'undefined') ? userZoom : 1.0;
+
+            let baseScale;
             if (vw > baseWidth) {
-                const scale = Math.min(vw / baseWidth, vh / 810, 1.35); // cap at 1.35x
-                deck.style.transform = 'scale(' + scale + ')';
-                deck.style.width = (100 / scale) + '%';
-                deck.style.height = (100 / scale) + '%';
-                deck.style.transformOrigin = 'top left';
+                baseScale = Math.min(vw / baseWidth, vh / 810, 1.35); // cap at 1.35x
             } else {
-                deck.style.transform = '';
-                deck.style.width = '';
-                deck.style.height = '';
+                baseScale = 1;
             }
+
+            const finalScale = baseScale * zoom;
+            deck.style.transform = 'scale(' + finalScale + ')';
+            deck.style.width = (100 / finalScale) + '%';
+            deck.style.height = (100 / finalScale) + '%';
+            deck.style.transformOrigin = 'top left';
         }
         
         scaleDeck();
@@ -3179,6 +3310,69 @@ function closeImageModal() {
 }
 document.addEventListener('keydown', function(e) { if(e.key==='Escape') closeImageModal(); });
 </script>
+    <!-- Zoom + PDF Toolbar -->
+    <div id="zoom-toolbar">
+        <button onclick="zoomOut()" title="Zoom out" aria-label="Zoom out">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+        </button>
+        <span id="zoom-label">100%</span>
+        <button onclick="zoomIn()" title="Zoom in" aria-label="Zoom in">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+        </button>
+        <div class="zoom-divider"></div>
+        <button id="pdf-btn" onclick="exportPDF()" title="Baixar PDF" aria-label="Baixar PDF">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            PDF
+        </button>
+    </div>
+
+    <script>
+        // === ZOOM CONTROLS ===
+        let userZoom = 1.0;
+
+        function updateZoomLabel() {
+            document.getElementById('zoom-label').textContent = Math.round(userZoom * 100) + '%';
+        }
+
+        function zoomIn() {
+            userZoom = Math.min(parseFloat((userZoom + 0.1).toFixed(1)), 2.0);
+            scaleDeck();
+            updateZoomLabel();
+        }
+
+        function zoomOut() {
+            userZoom = Math.max(parseFloat((userZoom - 0.1).toFixed(1)), 0.4);
+            scaleDeck();
+            updateZoomLabel();
+        }
+
+        // === PDF EXPORT (print-based, vetorial) ===
+        function exportPDF() {
+            const btn = document.getElementById('pdf-btn');
+            btn.textContent = 'Preparando...';
+            btn.disabled = true;
+
+            // Give browser a frame to update UI, then print
+            requestAnimationFrame(function() {
+                requestAnimationFrame(function() {
+                    window.print();
+                    // Restore button after print dialog closes
+                    setTimeout(function() {
+                        btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> PDF';
+                        btn.disabled = false;
+                    }, 1000);
+                });
+            });
+        }
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', function(e) {
+            if ((e.metaKey || e.ctrlKey) && e.key === '=') { e.preventDefault(); zoomIn(); }
+            if ((e.metaKey || e.ctrlKey) && e.key === '-') { e.preventDefault(); zoomOut(); }
+            if ((e.metaKey || e.ctrlKey) && e.key === '0') { e.preventDefault(); userZoom = 1.0; scaleDeck(); updateZoomLabel(); }
+        });
+    </script>
+
 </body>
 
 </html>
