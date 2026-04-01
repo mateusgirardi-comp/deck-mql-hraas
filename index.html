@@ -1867,6 +1867,13 @@
                 opacity: 1 !important;
                 transform: none !important;
             }
+
+            /* Center the JS-positioned arrow — initS3() uses getBoundingClientRect()
+               which doesn't run for print layout; override with CSS 50% */
+            #s3-center-arrow {
+                top: 50% !important;
+                transform: translate(-50%, -50%) !important;
+            }
         }
     </style>
 </head>
