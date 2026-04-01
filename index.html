@@ -1843,6 +1843,14 @@
                 page-break-after: avoid !important;
             }
 
+            /* Force ALL backgrounds, colors, and shadows to print
+               (otherwise Chrome strips them — no colored circles, no badges, etc.) */
+            *, *::before, *::after {
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+                color-adjust: exact !important;
+            }
+
             /* Kill all animations so elements don't get stuck at opacity:0
                from their animation "from" keyframe (e.g. cover slide stats bar) */
             *, *::before, *::after {
