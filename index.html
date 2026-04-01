@@ -3329,153 +3329,152 @@ document.addEventListener('keydown', function(e) { if(e.key==='Escape') closeIma
         });
 
         // === PDF ===
-
-        // Force all cross-origin imgs to reload with CORS attribute
-        // (works for t1.gstatic.com / Google which supports CORS)
-        function reloadImagesWithCORS() {
-            return new Promise(function(resolve) {
-                var imgs = Array.from(document.querySelectorAll('img[src]'));
-                var crossOriginImgs = imgs.filter(function(img) {
-                    var src = img.src;
-                    if (!src || src.startsWith('data:') || src.startsWith('blob:')) return false;
-                    try { return new URL(src).origin !== location.origin; } catch(e) { return false; }
-                });
-                if (!crossOriginImgs.length) { resolve([]); return; }
-
-                var restores = [];
-                var pending = crossOriginImgs.length;
-                function done() { if (--pending <= 0) resolve(restores); }
-
-                crossOriginImgs.forEach(function(img) {
-                    var origCO = img.crossOrigin;
-                    var origSrc = img.src;
-                    restores.push({ img:img, crossOrigin:origCO, src:origSrc });
-
-                    img.crossOrigin = 'anonymous';
-                    var newImg = new Image();
-                    newImg.crossOrigin = 'anonymous';
-                    newImg.onload = function() {
-                        // CORS worked — create data URL via canvas
-                        try {
-                            var c = document.createElement('canvas');
-                            c.width = newImg.naturalWidth; c.height = newImg.naturalHeight;
-                            c.getContext('2d').drawImage(newImg, 0, 0);
-                            img.src = c.toDataURL('image/png');
-                        } catch(e) {
-                            // Tainted even with CORS (rare) — leave as-is
-                        }
-                        done();
-                    };
-                    newImg.onerror = function() {
-                        // CORS not available for this image — leave original src
-                        // html2canvas will skip it (blank box, but no crash)
-                        done();
-                    };
-                    // For logo imgs: prefer t1.gstatic.com which has CORS
-                    var domain = img.getAttribute('data-domain');
-                    if (domain) {
-                        newImg.src = 'https://t1.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://' + domain + '&size=256';
-                    } else {
-                        newImg.src = origSrc;
-                    }
-                    // Timeout fallback
-                    setTimeout(done, 6000);
-                });
-            });
-        }
-
         async function exportPDF() {
             if (!window.html2canvas || !window.jspdf) {
-                alert('Bibliotecas PDF não carregaram. Recarregue a página (Cmd+Shift+R) e tente novamente.');
+                alert('Bibliotecas PDF não carregaram. Faça Cmd+Shift+R e tente novamente.');
                 return;
             }
+
             var btn = document.getElementById('pdf-btn');
             var loadingEl = document.getElementById('pdf-loading');
             var progressEl = document.getElementById('pdf-progress');
-            btn.disabled = true; loadingEl.classList.add('active');
+            btn.disabled = true;
+            loadingEl.classList.add('active');
 
-            var W=1440, H=810;
-            var allSlides = document.querySelectorAll('.slide');
-            var total = allSlides.length;
-            var origIdx = Array.from(allSlides).findIndex(function(s){return s.classList.contains('active');});
+            var W = 1440, H = 810;
+            var slides = document.querySelectorAll('.slide');
+            var origIdx = Array.from(slides).findIndex(function(s){ return s.classList.contains('active'); });
+            var deck = document.getElementById('deck');
+            var html = document.documentElement;
+            var body = document.body;
 
-            // Hide UI chrome
-            var CHROME = ['zoom-toolbar','pdf-loading','modal-overlay','team-modal-overlay','img-modal'];
-            CHROME.forEach(function(id){ var el=document.getElementById(id); if(el){el._sv=el.style.visibility;el.style.visibility='hidden';} });
-            var fixedEls = Array.from(document.querySelectorAll('[style*="position:fixed"]'));
-            fixedEls.forEach(function(el){ el._sv=el.style.visibility; el.style.visibility='hidden'; });
+            // ── STEP 1: Force exact 1440×810 layout ──────────────────────────
+            // Root cause of distortion: on non-16:9 screens (MacBook 16:10/3:2),
+            // capturing at viewport dimensions then squeezing into 1440×810 PDF
+            // stretches content. Fix: set layout to exactly 1440×810 before capture.
+            deck.style.transform      = 'none';
+            deck.style.width          = W + 'px';
+            deck.style.height         = H + 'px';
+            deck.style.transformOrigin = 'top left';
+            html.style.width = W + 'px'; html.style.height = H + 'px'; html.style.overflow = 'hidden';
+            body.style.width = W + 'px'; body.style.height = H + 'px'; body.style.overflow = 'hidden';
 
-            // 1. Pre-convert cross-origin images to data URLs via CORS
-            progressEl.textContent = 'Carregando imagens...';
-            var imgRestores = await reloadImagesWithCORS();
+            // ── STEP 2: Pre-load company logos with CORS ──────────────────────
+            // t1.gstatic.com (Google Favicon V2) serves Access-Control-Allow-Origin: *
+            // Loading from there with crossOrigin='anonymous' lets html2canvas
+            // use these images in canvas without tainting it.
+            progressEl.textContent = 'Carregando logos...';
+            var logoRestores = [];
+            document.querySelectorAll('img.logo-img, img.logo-img-sm').forEach(function(img) {
+                var domain = img.getAttribute('data-domain');
+                if (!domain) return;
+                var corsSrc = 'https://t1.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://' + domain + '&size=256';
+                logoRestores.push({ img:img, src:img.src, co:img.crossOrigin });
+                img.crossOrigin = 'anonymous';
+                img.src = corsSrc;
+            });
+            // Also mark Imgur images (which support CORS) for CORS loading
+            document.querySelectorAll('img[src*="imgur.com"]').forEach(function(img) {
+                if (!img.crossOrigin) {
+                    logoRestores.push({ img:img, src:img.src, co:img.crossOrigin });
+                    img.crossOrigin = 'anonymous';
+                    // force CORS reload
+                    var s = img.src;
+                    img.src = '';
+                    img.src = s;
+                }
+            });
+            await new Promise(function(r){ setTimeout(r, 1200); }); // wait for logo loads
 
-            // 2. Inject capture-time overrides:
-            //    - Snap all CSS animations to final state (fixes blank cover)
-            //    - Remove backdrop-filter (html2canvas can't render it)
-            //    - Hide video (cross-origin, can't capture)
-            var cap = document.createElement('style');
-            cap.id = '__pdfcap';
-            cap.textContent =
-                '* { animation-duration:0.001s !important; animation-delay:0s !important; ' +
-                'animation-fill-mode:both !important; transition-duration:0s !important; ' +
-                'backdrop-filter:none !important; -webkit-backdrop-filter:none !important; } ' +
-                'video { opacity:0 !important; }';
-            document.head.appendChild(cap);
-            await new Promise(function(r){setTimeout(r,200);});
+            // ── STEP 3: Inject render overrides ──────────────────────────────
+            // (a) Snap CSS animations to final state → fixes blank cover slide
+            //     (hero-h1 / hero-badge start at opacity:0 and restart on slide re-activate)
+            // (b) Remove backdrop-filter → html2canvas renders it as transparent
+            // (c) Hide video → cross-origin, can't capture, shows black
+            var capStyle = document.createElement('style');
+            capStyle.textContent =
+                '* { animation-duration: 0.001s !important; animation-delay: 0s !important; ' +
+                'animation-fill-mode: both !important; transition-duration: 0s !important; ' +
+                'backdrop-filter: none !important; -webkit-backdrop-filter: none !important; } ' +
+                'video { opacity: 0 !important; }';
+            document.head.appendChild(capStyle);
+            await new Promise(function(r){ setTimeout(r, 250); });
 
-            var vw = window.innerWidth;
-            var vh = window.innerHeight;
-
+            // ── STEP 4: Capture each slide ────────────────────────────────────
             try {
                 var pdf = new window.jspdf.jsPDF({ orientation:'landscape', unit:'px', format:[W,H] });
 
-                for (var i=0; i<total; i++) {
-                    progressEl.textContent = 'Slide '+(i+1)+' de '+total+'...';
-                    allSlides.forEach(function(s){s.classList.remove('active');});
-                    allSlides[i].classList.add('active');
-                    await new Promise(function(r){setTimeout(r,300);});
+                for (var i = 0; i < slides.length; i++) {
+                    progressEl.textContent = 'Slide ' + (i+1) + ' de ' + slides.length;
+                    slides.forEach(function(s){ s.classList.remove('active'); });
+                    slides[i].classList.add('active');
+                    await new Promise(function(r){ setTimeout(r, 300); });
 
-                    var canvas = await html2canvas(document.body, {
-                        scale: 2,
-                        useCORS: true,
-                        allowTaint: false,
+                    var canvas = await html2canvas(deck, {
+                        scale: 2,             // 2× for crisp output (2880×1620 → scaled to 1440×810 in PDF)
+                        useCORS: true,        // tells html2canvas to reload images with crossOrigin:'anonymous'
+                        allowTaint: false,    // skip images without CORS (blank box) vs. tainting canvas
                         backgroundColor: '#ffffff',
-                        width: vw, height: vh,
-                        windowWidth: vw, windowHeight: vh,
-                        x: 0, y: 0,
-                        scrollX: -window.scrollX, scrollY: -window.scrollY,
+                        width:  W,            // capture exactly 1440px
+                        height: H,            // capture exactly 810px
+                        windowWidth:  W,      // vw/vh units render as if viewport is 1440×810
+                        windowHeight: H,
+                        x: 0, y: 0, scrollX: 0, scrollY: 0,
                         logging: false,
-                        imageTimeout: 10000,
+                        imageTimeout: 12000,
                         onclone: function(doc) {
-                            CHROME.forEach(function(id){ var el=doc.getElementById(id); if(el) el.style.display='none'; });
-                            doc.querySelectorAll('[style*="position:fixed"]').forEach(function(el){ el.style.display='none'; });
-                            var s=doc.createElement('style');
-                            s.textContent='* {animation-duration:0.001s !important;animation-delay:0s !important;animation-fill-mode:both !important;backdrop-filter:none !important;-webkit-backdrop-filter:none !important;} video{opacity:0 !important;}';
+                            // Inject overrides into the cloned document html2canvas renders
+                            var s = doc.createElement('style');
+                            s.textContent =
+                                '* { animation-duration:0.001s !important; animation-delay:0s !important; ' +
+                                'animation-fill-mode:both !important; backdrop-filter:none !important; ' +
+                                '-webkit-backdrop-filter:none !important; } video { opacity:0 !important; }';
                             doc.head.appendChild(s);
+                            // Hide fixed chrome elements
+                            ['zoom-toolbar','pdf-loading','modal-overlay','team-modal-overlay','img-modal'].forEach(function(id){
+                                var el = doc.getElementById(id);
+                                if (el) el.style.display = 'none';
+                            });
+                            doc.querySelectorAll('[style*="position:fixed"]').forEach(function(el){
+                                el.style.display = 'none';
+                            });
                         }
                     });
 
-                    var img = canvas.toDataURL('image/jpeg', 0.93);
-                    if (i>0) pdf.addPage([W,H],'landscape');
-                    pdf.addImage(img,'JPEG',0,0,W,H,'','FAST');
+                    if (i > 0) pdf.addPage([W, H], 'landscape');
+                    pdf.addImage(canvas.toDataURL('image/jpeg', 0.93), 'JPEG', 0, 0, W, H, '', 'FAST');
                 }
 
                 pdf.save('HRaaS-Comp.pdf');
+
             } catch(err) {
                 console.error('PDF error:', err);
-                alert('Erro: '+err.message);
+                alert('Erro ao gerar PDF: ' + err.message);
             }
 
-            // Restore
-            allSlides.forEach(function(s){s.classList.remove('active');});
-            allSlides[origIdx].classList.add('active');
-            var capEl=document.getElementById('__pdfcap'); if(capEl) document.head.removeChild(capEl);
-            imgRestores.forEach(function(r){ r.img.src=r.src; if(r.crossOrigin!==null) r.img.crossOrigin=r.crossOrigin; else r.img.removeAttribute('crossorigin'); });
-            CHROME.forEach(function(id){ var el=document.getElementById(id); if(el) el.style.visibility=el._sv||''; });
-            fixedEls.forEach(function(el){ el.style.visibility=el._sv||''; });
+            // ── STEP 5: Restore everything ────────────────────────────────────
+            slides.forEach(function(s){ s.classList.remove('active'); });
+            slides[origIdx].classList.add('active');
+
+            deck.style.transform = '';
+            deck.style.width = '';
+            deck.style.height = '';
+            deck.style.transformOrigin = '';
+            html.style.width = ''; html.style.height = ''; html.style.overflow = '';
+            body.style.width = ''; body.style.height = ''; body.style.overflow = '';
+            scaleDeck(); // Re-apply correct scale for current viewport
+
+            capStyle.remove();
+
+            logoRestores.forEach(function(r){
+                r.img.src = r.src;
+                r.img.crossOrigin = r.co || '';
+                if (!r.co) r.img.removeAttribute('crossorigin');
+            });
+
             loadingEl.classList.remove('active');
-            btn.innerHTML='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> PDF';
-            btn.disabled=false;
+            btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> PDF';
+            btn.disabled = false;
         }
     </script>
 
