@@ -3451,6 +3451,60 @@ document.addEventListener('keydown', function(e) { if(e.key==='Escape') closeIma
                     slides[i].classList.add('active');
                     await new Promise(function(r){ setTimeout(r, 300); });
 
+                    // ── Per-slide: re-run JS layout calculations ───────────
+                    // Slide 3 (index 2): recalculate center-arrow position
+                    // (initS3 only fires via navigate(), not our manual activation)
+                    if (i === 2) {
+                        await new Promise(function(r) { requestAnimationFrame(function() {
+                            var col = document.getElementById('s3-center-col');
+                            var arr = document.getElementById('s3-center-arrow');
+                            var frm = document.getElementById('s3-right-frame');
+                            if (col && arr && frm) {
+                                var colTop = col.getBoundingClientRect().top;
+                                var fRect = frm.getBoundingClientRect();
+                                arr.style.top = ((fRect.top + fRect.bottom) / 2 - colTop) + 'px';
+                            }
+                            r();
+                        }); });
+                    }
+
+                    // ── Per-slide: apply computed layout properties inline ─
+                    // html2canvas's layout engine may miss CSS-class flex/grid
+                    // and can't resolve fr units. Reading from live computed
+                    // styles (already at 1440×810) gives correct pixel values.
+                    var layoutRestores = [];
+                    deck.querySelectorAll('*').forEach(function(el) {
+                        var cs = window.getComputedStyle(el);
+                        var disp = cs.display;
+                        var inlineChanges = {};
+
+                        if (disp === 'flex' || disp === 'inline-flex') {
+                            if (!el.style.display)          inlineChanges.display         = disp;
+                            if (!el.style.flexDirection)    inlineChanges.flexDirection    = cs.flexDirection;
+                            if (!el.style.alignItems)       inlineChanges.alignItems       = cs.alignItems;
+                            if (!el.style.justifyContent)   inlineChanges.justifyContent   = cs.justifyContent;
+                            if (!el.style.flexWrap)         inlineChanges.flexWrap         = cs.flexWrap;
+                            if (!el.style.gap)              inlineChanges.gap              = cs.gap;
+                        }
+                        if (disp === 'grid' || disp === 'inline-grid') {
+                            if (!el.style.display)          inlineChanges.display          = disp;
+                            // getComputedStyle returns resolved px values (no fr units)
+                            inlineChanges.gridTemplateColumns = cs.gridTemplateColumns;
+                            inlineChanges.gridTemplateRows    = cs.gridTemplateRows;
+                            if (!el.style.alignItems)       inlineChanges.alignItems       = cs.alignItems;
+                            if (!el.style.gap)              inlineChanges.gap              = cs.gap;
+                        }
+
+                        if (Object.keys(inlineChanges).length) {
+                            var restore = { el: el, props: {} };
+                            Object.keys(inlineChanges).forEach(function(p) {
+                                restore.props[p] = el.style[p];
+                                el.style[p] = inlineChanges[p];
+                            });
+                            layoutRestores.push(restore);
+                        }
+                    });
+
                     var canvas = await html2canvas(deck, {
                         scale: 2,
                         useCORS: true,
@@ -3501,6 +3555,11 @@ document.addEventListener('keydown', function(e) { if(e.key==='Escape') closeIma
                             // (d) Nav arrows by onclick
                             doc.querySelectorAll('[onclick*="navigate"]').forEach(function(el){ el.style.display = 'none'; });
                         }
+                    });
+
+                    // Restore per-slide layout overrides
+                    layoutRestores.forEach(function(r) {
+                        Object.keys(r.props).forEach(function(p) { r.el.style[p] = r.props[p]; });
                     });
 
                     if (i > 0) pdf.addPage([W, H], 'landscape');
