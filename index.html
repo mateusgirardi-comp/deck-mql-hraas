@@ -3313,8 +3313,47 @@ document.addEventListener('keydown', function(e) { if(e.key==='Escape') closeIma
     </div>
 
     <!-- dom-to-image-more (SVG foreignObject — full browser CSS Grid/Flex) + jsPDF -->
-    <script src="https://cdn.jsdelivr.net/npm/dom-to-image-more@2.10.3/dist/dom-to-image-more.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script>
+    (function() {
+        var libs = [
+            {
+                primary:   'https://cdn.jsdelivr.net/npm/dom-to-image-more@2.10.3/dist/dom-to-image-more.min.js',
+                fallback:  'https://unpkg.com/dom-to-image-more@2.10.3/dist/dom-to-image-more.min.js',
+                check: function(){ return !!window.domtoimage; }
+            },
+            {
+                primary:   'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js',
+                fallback:  'https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js',
+                check: function(){ return !!(window.jspdf && window.jspdf.jsPDF); }
+            }
+        ];
+        function loadScript(url, cb) {
+            var s = document.createElement('script');
+            s.src = url;
+            s.onload = cb;
+            s.onerror = function(){ cb(new Error('failed: ' + url)); };
+            document.head.appendChild(s);
+        }
+        function loadWithFallback(lib, done) {
+            loadScript(lib.primary, function(err) {
+                if (!err && lib.check()) { done(); return; }
+                console.warn('Primary CDN failed for', lib.primary, '— trying fallback');
+                loadScript(lib.fallback, function(err2) {
+                    if (!err2 && lib.check()) { done(); return; }
+                    console.error('Both CDNs failed for lib');
+                    done(new Error('lib load failed'));
+                });
+            });
+        }
+        // Load sequentially (jsPDF can load in parallel but keep simple)
+        loadWithFallback(libs[0], function(e1) {
+            loadWithFallback(libs[1], function(e2) {
+                window._pdfLibsReady = !e1 && !e2;
+                if (!window._pdfLibsReady) console.error('PDF libraries failed to load');
+            });
+        });
+    })();
+    </script>
 
     <script>
         // === ZOOM ===
@@ -3347,8 +3386,8 @@ document.addEventListener('keydown', function(e) { if(e.key==='Escape') closeIma
         }
 
         async function exportPDF() {
-            if (!window.domtoimage || !window.jspdf) {
-                alert('Bibliotecas PDF não carregaram. Faça Cmd+Shift+R e tente novamente.');
+            if (!window.domtoimage || !(window.jspdf && window.jspdf.jsPDF)) {
+                alert('Bibliotecas PDF não carregaram. Verifique sua conexão e faça Cmd+Shift+R.');
                 return;
             }
 
