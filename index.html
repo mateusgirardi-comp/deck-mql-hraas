@@ -3319,78 +3319,61 @@ document.addEventListener('keydown', function(e) { if(e.key==='Escape') closeIma
     <script>
         // === ZOOM CONTROLS ===
         let userZoom = 1.0;
-
-        function updateZoomLabel() {
-            document.getElementById('zoom-label').textContent = Math.round(userZoom * 100) + '%';
-        }
-        function zoomIn() {
-            userZoom = Math.min(parseFloat((userZoom + 0.1).toFixed(1)), 2.0);
-            scaleDeck(); updateZoomLabel();
-        }
-        function zoomOut() {
-            userZoom = Math.max(parseFloat((userZoom - 0.1).toFixed(1)), 0.4);
-            scaleDeck(); updateZoomLabel();
-        }
+        function updateZoomLabel() { document.getElementById('zoom-label').textContent = Math.round(userZoom * 100) + '%'; }
+        function zoomIn()  { userZoom = Math.min(parseFloat((userZoom + 0.1).toFixed(1)), 2.0); scaleDeck(); updateZoomLabel(); }
+        function zoomOut() { userZoom = Math.max(parseFloat((userZoom - 0.1).toFixed(1)), 0.4); scaleDeck(); updateZoomLabel(); }
         document.addEventListener('keydown', function(e) {
-            if ((e.metaKey || e.ctrlKey) && e.key === '=') { e.preventDefault(); zoomIn(); }
-            if ((e.metaKey || e.ctrlKey) && e.key === '-') { e.preventDefault(); zoomOut(); }
-            if ((e.metaKey || e.ctrlKey) && e.key === '0') { e.preventDefault(); userZoom = 1.0; scaleDeck(); updateZoomLabel(); }
+            if ((e.metaKey||e.ctrlKey) && e.key==='=') { e.preventDefault(); zoomIn(); }
+            if ((e.metaKey||e.ctrlKey) && e.key==='-') { e.preventDefault(); zoomOut(); }
+            if ((e.metaKey||e.ctrlKey) && e.key==='0') { e.preventDefault(); userZoom=1.0; scaleDeck(); updateZoomLabel(); }
         });
 
-        // === PDF EXPORT — html2canvas + jsPDF ===
-
+        // === PDF EXPORT ===
         function blobToDataURL(blob) {
-            return new Promise(function(resolve, reject) {
-                var reader = new FileReader();
-                reader.onload = function() { resolve(reader.result); };
-                reader.onerror = reject;
-                reader.readAsDataURL(blob);
+            return new Promise(function(res, rej) {
+                var r = new FileReader(); r.onload = function(){res(r.result);}; r.onerror = rej; r.readAsDataURL(blob);
             });
         }
 
         async function tryFetchDataURL(src) {
-            // 1. Try direct CORS fetch
+            // 1. Direct CORS
             try {
-                var r = await fetch(src, { mode: 'cors', cache: 'force-cache', signal: AbortSignal.timeout(4000) });
+                var r = await fetch(src, { mode:'cors', cache:'force-cache', signal: AbortSignal.timeout(3000) });
                 if (r.ok) return await blobToDataURL(await r.blob());
             } catch(e) {}
-            // 2. Try via corsproxy.io
+            // 2. corsproxy.io
             try {
-                var proxy = 'https://corsproxy.io/?' + encodeURIComponent(src);
-                var r2 = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
+                var r2 = await fetch('https://corsproxy.io/?' + encodeURIComponent(src), { signal: AbortSignal.timeout(7000) });
                 if (r2.ok) return await blobToDataURL(await r2.blob());
+            } catch(e) {}
+            // 3. allorigins fallback
+            try {
+                var r3 = await fetch('https://api.allorigins.win/raw?url=' + encodeURIComponent(src), { signal: AbortSignal.timeout(7000) });
+                if (r3.ok) return await blobToDataURL(await r3.blob());
             } catch(e) {}
             return null;
         }
 
         var TRANSPARENT_PX = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 
-        async function preloadCrossOriginImages(container) {
-            var imgs = Array.from(container.querySelectorAll('img[src]'));
+        async function preloadCrossOriginImages(root) {
+            var imgs = Array.from(root.querySelectorAll('img[src]'));
             var restores = [];
-
             var tasks = imgs.map(async function(img) {
                 var src = img.getAttribute('src') || img.src;
                 if (!src || src.startsWith('data:') || src.startsWith('blob:')) return;
-                try {
-                    var u = new URL(src, location.href);
-                    if (u.origin === location.origin) return;
-                } catch(e) { return; }
-
+                try { var u = new URL(src, location.href); if (u.origin === location.origin) return; } catch(e) { return; }
                 var origSrc = img.src;
                 var dataUrl = await tryFetchDataURL(src);
-                restores.push({ img: img, origSrc: origSrc });
+                restores.push({ img:img, origSrc:origSrc });
                 img.src = dataUrl || TRANSPARENT_PX;
-
                 if (dataUrl) {
-                    await new Promise(function(resolve) {
-                        if (img.complete) { resolve(); return; }
-                        img.onload = resolve; img.onerror = resolve;
-                        setTimeout(resolve, 2000);
+                    await new Promise(function(res) {
+                        if (img.complete) { res(); return; }
+                        img.onload = res; img.onerror = res; setTimeout(res, 2000);
                     });
                 }
             });
-
             await Promise.allSettled(tasks);
             return restores;
         }
@@ -3399,84 +3382,90 @@ document.addEventListener('keydown', function(e) { if(e.key==='Escape') closeIma
             var btn = document.getElementById('pdf-btn');
             var loadingEl = document.getElementById('pdf-loading');
             var progressEl = document.getElementById('pdf-progress');
-
             btn.disabled = true;
             loadingEl.classList.add('active');
-            progressEl.textContent = 'Carregando imagens...';
 
             var W = 1440, H = 810;
             var allSlides = document.querySelectorAll('.slide');
-            var totalSlides = allSlides.length;
-            var originalIdx = Array.from(allSlides).findIndex(function(s) { return s.classList.contains('active'); });
+            var total = allSlides.length;
+            var originalIdx = Array.from(allSlides).findIndex(function(s){ return s.classList.contains('active'); });
 
-            var deck = document.getElementById('deck');
-            var savedTransform = deck.style.transform;
-            var savedWidth = deck.style.width;
-            var savedHeight = deck.style.height;
-            var savedOrigin = deck.style.transformOrigin;
+            // --- 1. Hide UI chrome (visibility so layout doesn't shift) ---
+            var chromeIds = ['zoom-toolbar','pdf-loading','modal-overlay','team-modal-overlay','img-modal'];
+            chromeIds.forEach(function(id){ var el=document.getElementById(id); if(el){el._sv=el.style.visibility; el.style.visibility='hidden';} });
+            var fixedEls = Array.from(document.querySelectorAll('[style*="position:fixed"]'));
+            fixedEls.forEach(function(el){ el._sv=el.style.visibility; el.style.visibility='hidden'; });
 
-            // Reset deck to native size
-            deck.style.transform = 'none';
-            deck.style.width = W + 'px';
-            deck.style.height = H + 'px';
-            deck.style.transformOrigin = 'top left';
+            // --- 2. Preload all cross-origin images via proxy ---
+            progressEl.textContent = 'Carregando imagens (pode demorar ~15s)...';
+            var imgRestores = await preloadCrossOriginImages(document.body);
 
-            // Hide UI chrome
-            var chromeEls = [
-                document.getElementById('zoom-toolbar'),
-                document.getElementById('pdf-loading')
-            ].concat(
-                Array.from(document.querySelectorAll('[onclick*="navigate"]')),
-                Array.from(document.querySelectorAll('[style*="position:fixed"]'))
-            ).filter(Boolean);
-            chromeEls.forEach(function(el) { el._pdfVis = el.style.visibility; el.style.visibility = 'hidden'; });
+            // --- 3. Inject global style overrides for capture ---
+            // Fixes: (a) CSS animations restarting at opacity:0 when slide re-activates
+            //        (b) backdrop-filter which html2canvas can't render
+            //        (c) video elements show as black frames
+            var capStyle = document.createElement('style');
+            capStyle.id = '__pdf_cap';
+            capStyle.textContent = [
+                '* {',
+                '  animation-duration: 0.001s !important;',
+                '  animation-delay: 0s !important;',
+                '  animation-fill-mode: both !important;',
+                '  transition-duration: 0s !important;',
+                '  backdrop-filter: none !important;',
+                '  -webkit-backdrop-filter: none !important;',
+                '}',
+                'video { opacity: 0 !important; }'
+            ].join('\n');
+            document.head.appendChild(capStyle);
+
+            // Let the style take effect (animations snap to final state)
+            await new Promise(function(r){ setTimeout(r, 200); });
+
+            var vw = window.innerWidth;
+            var vh = window.innerHeight;
 
             try {
-                // Pre-load all cross-origin images as data URLs
-                var restores = await preloadCrossOriginImages(deck);
-                await new Promise(function(r) { setTimeout(r, 200); });
+                var jsPDF = window.jspdf.jsPDF;
+                var pdf = new jsPDF({ orientation:'landscape', unit:'px', format:[W, H] });
 
-                var { jsPDF } = window.jspdf;
-                var pdf = new jsPDF({ orientation: 'landscape', unit: 'px', format: [W, H] });
+                for (var i = 0; i < total; i++) {
+                    progressEl.textContent = 'Gerando slide ' + (i+1) + ' de ' + total + '...';
 
-                for (var i = 0; i < totalSlides; i++) {
-                    progressEl.textContent = 'Slide ' + (i + 1) + ' de ' + totalSlides;
-
-                    allSlides.forEach(function(s) { s.classList.remove('active'); });
+                    allSlides.forEach(function(s){ s.classList.remove('active'); });
                     allSlides[i].classList.add('active');
-                    await new Promise(function(r) { setTimeout(r, 180); });
+                    // Wait for slide to render + animations to snap
+                    await new Promise(function(r){ setTimeout(r, 250); });
 
-                    var canvas = await html2canvas(deck, {
+                    var canvas = await html2canvas(document.body, {
                         scale: 2,
                         useCORS: true,
                         allowTaint: false,
-                        backgroundColor: '#ffffff',
-                        width: W,
-                        height: H,
-                        windowWidth: W,
-                        windowHeight: H,
+                        backgroundColor: null,
+                        width: vw,
+                        height: vh,
+                        windowWidth: vw,
+                        windowHeight: vh,
                         x: 0, y: 0,
-                        scrollX: 0, scrollY: 0,
+                        scrollX: -window.scrollX,
+                        scrollY: -window.scrollY,
                         logging: false,
-                        imageTimeout: 10000,
+                        imageTimeout: 12000,
                         onclone: function(doc) {
-                            ['zoom-toolbar','pdf-loading'].forEach(function(id) {
-                                var el = doc.getElementById(id);
-                                if (el) el.style.display = 'none';
-                            });
-                            doc.querySelectorAll('[onclick*="navigate"],[style*="position:fixed"]').forEach(function(el) {
-                                el.style.display = 'none';
-                            });
+                            // Remove chrome in clone
+                            chromeIds.forEach(function(id){ var el=doc.getElementById(id); if(el) el.style.display='none'; });
+                            doc.querySelectorAll('[style*="position:fixed"]').forEach(function(el){ el.style.display='none'; });
+                            // Apply same overrides in clone
+                            var s = doc.createElement('style');
+                            s.textContent = '* { animation-duration:0.001s !important; animation-delay:0s !important; animation-fill-mode:both !important; backdrop-filter:none !important; -webkit-backdrop-filter:none !important; } video { opacity:0 !important; }';
+                            doc.head.appendChild(s);
                         }
                     });
 
-                    var imgData = canvas.toDataURL('image/jpeg', 0.95);
+                    var imgData = canvas.toDataURL('image/jpeg', 0.93);
                     if (i > 0) pdf.addPage([W, H], 'landscape');
                     pdf.addImage(imgData, 'JPEG', 0, 0, W, H, '', 'FAST');
                 }
-
-                // Restore original image srcs
-                restores.forEach(function(r) { r.img.src = r.origSrc; });
 
                 pdf.save('HRaaS-Comp.pdf');
 
@@ -3485,14 +3474,17 @@ document.addEventListener('keydown', function(e) { if(e.key==='Escape') closeIma
                 alert('Erro ao gerar PDF: ' + err.message);
             }
 
-            // Restore deck & chrome
-            allSlides.forEach(function(s) { s.classList.remove('active'); });
+            // --- Restore everything ---
+            allSlides.forEach(function(s){ s.classList.remove('active'); });
             allSlides[originalIdx].classList.add('active');
-            deck.style.transform = savedTransform;
-            deck.style.width = savedWidth;
-            deck.style.height = savedHeight;
-            deck.style.transformOrigin = savedOrigin;
-            chromeEls.forEach(function(el) { el.style.visibility = el._pdfVis || ''; });
+
+            var capEl = document.getElementById('__pdf_cap');
+            if (capEl) document.head.removeChild(capEl);
+
+            imgRestores.forEach(function(r){ r.img.src = r.origSrc; });
+
+            chromeIds.forEach(function(id){ var el=document.getElementById(id); if(el) el.style.visibility=el._sv||''; });
+            fixedEls.forEach(function(el){ el.style.visibility = el._sv||''; });
 
             loadingEl.classList.remove('active');
             btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> PDF';
