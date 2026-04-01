@@ -3401,45 +3401,6 @@ document.addEventListener('keydown', function(e) { if(e.key==='Escape') closeIma
             window.addEventListener('afterprint', restore);
             setTimeout(function() { window.print(); }, 80);
         }
-
-                stash.parentNode.removeChild(stash);
-                pdf.save('HRaaS-Comp.pdf');
-
-            } catch(err) {
-                // Restore all stashed slides on error
-                try {
-                    Array.from(stash.children).forEach(function(s) { deck.appendChild(s); });
-                    stash.parentNode && stash.parentNode.removeChild(stash);
-                } catch(e2) {}
-                console.error('PDF error:', err);
-                alert('Erro ao gerar PDF: ' + err.message);
-            }
-
-            // ── 5. RESTORE ────────────────────────────────────────────────────
-            slides.forEach(function(s){ s.classList.remove('active'); });
-            slides[origIdx].classList.add('active');
-
-            deck.style.transform = '';
-            deck.style.width = '';
-            deck.style.height = '';
-            deck.style.transformOrigin = '';
-            html.style.width = ''; html.style.height = ''; html.style.overflow = '';
-            body.style.width = ''; body.style.height = ''; body.style.overflow = '';
-            scaleDeck();
-
-            capStyle.remove();
-
-            styleRestores.forEach(function(r){ r.el.setAttribute('style', r.orig); });
-
-            imgRestores.forEach(function(r){
-                r.img.src = r.src;
-                if (r.co !== undefined) r.img.crossOrigin = r.co || '';
-            });
-
-            loadingEl.classList.remove('active');
-            btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> PDF';
-            btn.disabled = false;
-        }
     </script>
 
 </body>
