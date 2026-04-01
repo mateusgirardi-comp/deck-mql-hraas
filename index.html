@@ -3329,6 +3329,23 @@ document.addEventListener('keydown', function(e) { if(e.key==='Escape') closeIma
         });
 
         // === PDF ===
+
+        function blobToDataURL(blob) {
+            return new Promise(function(res, rej) {
+                var r = new FileReader();
+                r.onload = function(){ res(r.result); };
+                r.onerror = rej;
+                r.readAsDataURL(blob);
+            });
+        }
+
+        // wsrv.nl is a free CDN that adds Access-Control-Allow-Origin:* to any image
+        function wsrvUrl(src) {
+            // Strip leading protocol for wsrv.nl format
+            var u = src.replace(/^https?:\/\//, '');
+            return 'https://wsrv.nl/?url=' + encodeURIComponent(u) + '&output=png';
+        }
+
         async function exportPDF() {
             if (!window.html2canvas || !window.jspdf) {
                 alert('Bibliotecas PDF não carregaram. Faça Cmd+Shift+R e tente novamente.');
@@ -3348,61 +3365,73 @@ document.addEventListener('keydown', function(e) { if(e.key==='Escape') closeIma
             var html = document.documentElement;
             var body = document.body;
 
-            // ── STEP 1: Force exact 1440×810 layout ──────────────────────────
-            // Root cause of distortion: on non-16:9 screens (MacBook 16:10/3:2),
-            // capturing at viewport dimensions then squeezing into 1440×810 PDF
-            // stretches content. Fix: set layout to exactly 1440×810 before capture.
-            deck.style.transform      = 'none';
-            deck.style.width          = W + 'px';
-            deck.style.height         = H + 'px';
+            // ── 1. PRE-LOAD LOGOS via wsrv.nl (has CORS) ─────────────────────
+            // wsrv.nl proxies any image and adds Access-Control-Allow-Origin: *
+            // Fetch as blob → data URL → set img.src (data: URLs are same-origin)
+            progressEl.textContent = 'Carregando logos...';
+            var imgRestores = [];
+
+            var logoImgs = Array.from(document.querySelectorAll('img.logo-img, img.logo-img-sm'));
+            await Promise.allSettled(logoImgs.map(async function(img) {
+                var domain = img.getAttribute('data-domain');
+                if (!domain) return;
+                var origSrc = img.src;
+                // Build target: t1.gstatic.com through wsrv.nl
+                var t1src = 't1.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://' + domain + '&size=256';
+                var proxied = wsrvUrl('https://' + t1src);
+                try {
+                    var resp = await fetch(proxied, { signal: AbortSignal.timeout(8000) });
+                    if (!resp.ok) throw new Error('status ' + resp.status);
+                    var dataUrl = await blobToDataURL(await resp.blob());
+                    imgRestores.push({ img:img, src:origSrc });
+                    img.src = dataUrl;
+                } catch(e) {
+                    // Proxy failed — leave original (will be blank in PDF, but no crash)
+                    console.warn('Logo proxy failed for', domain, e.message);
+                }
+            }));
+
+            // Also handle imgur images (they support CORS natively)
+            document.querySelectorAll('img[src*="imgur.com"]').forEach(function(img) {
+                if (img.crossOrigin !== 'anonymous') {
+                    imgRestores.push({ img:img, src:img.src, co:img.crossOrigin });
+                    img.crossOrigin = 'anonymous';
+                    var s = img.src; img.src = ''; img.src = s;
+                }
+            });
+
+            // ── 2. FORCE EXACT 1440×810 LAYOUT ───────────────────────────────
+            // Fixes distortion on non-16:9 screens (MacBook 3:2 ratio etc.)
+            deck.style.transform = 'none';
+            deck.style.width = W + 'px';
+            deck.style.height = H + 'px';
             deck.style.transformOrigin = 'top left';
             html.style.width = W + 'px'; html.style.height = H + 'px'; html.style.overflow = 'hidden';
             body.style.width = W + 'px'; body.style.height = H + 'px'; body.style.overflow = 'hidden';
 
-            // ── STEP 2: Pre-load company logos with CORS ──────────────────────
-            // t1.gstatic.com (Google Favicon V2) serves Access-Control-Allow-Origin: *
-            // Loading from there with crossOrigin='anonymous' lets html2canvas
-            // use these images in canvas without tainting it.
-            progressEl.textContent = 'Carregando logos...';
-            var logoRestores = [];
-            document.querySelectorAll('img.logo-img, img.logo-img-sm').forEach(function(img) {
-                var domain = img.getAttribute('data-domain');
-                if (!domain) return;
-                var corsSrc = 'https://t1.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://' + domain + '&size=256';
-                logoRestores.push({ img:img, src:img.src, co:img.crossOrigin });
-                img.crossOrigin = 'anonymous';
-                img.src = corsSrc;
-            });
-            // Also mark Imgur images (which support CORS) for CORS loading
-            document.querySelectorAll('img[src*="imgur.com"]').forEach(function(img) {
-                if (!img.crossOrigin) {
-                    logoRestores.push({ img:img, src:img.src, co:img.crossOrigin });
-                    img.crossOrigin = 'anonymous';
-                    // force CORS reload
-                    var s = img.src;
-                    img.src = '';
-                    img.src = s;
-                }
-            });
-            await new Promise(function(r){ setTimeout(r, 1200); }); // wait for logo loads
-
-            // ── STEP 3: Inject render overrides ──────────────────────────────
-            // (a) Snap CSS animations to final state → fixes blank cover slide
-            //     (hero-h1 / hero-badge start at opacity:0 and restart on slide re-activate)
-            // (b) Remove backdrop-filter → html2canvas renders it as transparent
-            // (c) Hide video → cross-origin, can't capture, shows black
+            // ── 3. INJECT RENDER OVERRIDES ────────────────────────────────────
+            // KEY FIX for blank cover: animation-delay:-9999s makes the browser
+            // treat every animation as "already ran for 9999 seconds" → jumps to
+            // the final (to) keyframe state. With fill-mode:both the element stays
+            // there. Eliminates all opacity:0 / translateY issues.
             var capStyle = document.createElement('style');
             capStyle.textContent =
-                '* { animation-duration: 0.001s !important; animation-delay: 0s !important; ' +
-                'animation-fill-mode: both !important; transition-duration: 0s !important; ' +
-                'backdrop-filter: none !important; -webkit-backdrop-filter: none !important; } ' +
+                '* { ' +
+                '  animation-delay: -9999s !important; ' +
+                '  animation-fill-mode: both !important; ' +
+                '  transition-duration: 0s !important; ' +
+                '  backdrop-filter: none !important; ' +
+                '  -webkit-backdrop-filter: none !important; ' +
+                '} ' +
                 'video { opacity: 0 !important; }';
             document.head.appendChild(capStyle);
             await new Promise(function(r){ setTimeout(r, 250); });
 
-            // ── STEP 4: Capture each slide ────────────────────────────────────
+            // ── 4. CAPTURE EACH SLIDE ─────────────────────────────────────────
+            var CHROME = ['zoom-toolbar','pdf-loading','modal-overlay','team-modal-overlay','img-modal'];
+
             try {
-                var pdf = new window.jspdf.jsPDF({ orientation:'landscape', unit:'px', format:[W,H] });
+                var pdf = new window.jspdf.jsPDF({ orientation:'landscape', unit:'px', format:[W, H] });
 
                 for (var i = 0; i < slides.length; i++) {
                     progressEl.textContent = 'Slide ' + (i+1) + ' de ' + slides.length;
@@ -3411,27 +3440,23 @@ document.addEventListener('keydown', function(e) { if(e.key==='Escape') closeIma
                     await new Promise(function(r){ setTimeout(r, 300); });
 
                     var canvas = await html2canvas(deck, {
-                        scale: 2,             // 2× for crisp output (2880×1620 → scaled to 1440×810 in PDF)
-                        useCORS: true,        // tells html2canvas to reload images with crossOrigin:'anonymous'
-                        allowTaint: false,    // skip images without CORS (blank box) vs. tainting canvas
+                        scale: 2,
+                        useCORS: true,
+                        allowTaint: false,
                         backgroundColor: '#ffffff',
-                        width:  W,            // capture exactly 1440px
-                        height: H,            // capture exactly 810px
-                        windowWidth:  W,      // vw/vh units render as if viewport is 1440×810
-                        windowHeight: H,
+                        width: W, height: H,
+                        windowWidth: W, windowHeight: H,
                         x: 0, y: 0, scrollX: 0, scrollY: 0,
                         logging: false,
-                        imageTimeout: 12000,
+                        imageTimeout: 15000,
                         onclone: function(doc) {
-                            // Inject overrides into the cloned document html2canvas renders
                             var s = doc.createElement('style');
                             s.textContent =
-                                '* { animation-duration:0.001s !important; animation-delay:0s !important; ' +
-                                'animation-fill-mode:both !important; backdrop-filter:none !important; ' +
-                                '-webkit-backdrop-filter:none !important; } video { opacity:0 !important; }';
+                                '* { animation-delay:-9999s !important; animation-fill-mode:both !important; ' +
+                                'backdrop-filter:none !important; -webkit-backdrop-filter:none !important; } ' +
+                                'video { opacity:0 !important; }';
                             doc.head.appendChild(s);
-                            // Hide fixed chrome elements
-                            ['zoom-toolbar','pdf-loading','modal-overlay','team-modal-overlay','img-modal'].forEach(function(id){
+                            CHROME.forEach(function(id){
                                 var el = doc.getElementById(id);
                                 if (el) el.style.display = 'none';
                             });
@@ -3452,7 +3477,7 @@ document.addEventListener('keydown', function(e) { if(e.key==='Escape') closeIma
                 alert('Erro ao gerar PDF: ' + err.message);
             }
 
-            // ── STEP 5: Restore everything ────────────────────────────────────
+            // ── 5. RESTORE ────────────────────────────────────────────────────
             slides.forEach(function(s){ s.classList.remove('active'); });
             slides[origIdx].classList.add('active');
 
@@ -3462,14 +3487,13 @@ document.addEventListener('keydown', function(e) { if(e.key==='Escape') closeIma
             deck.style.transformOrigin = '';
             html.style.width = ''; html.style.height = ''; html.style.overflow = '';
             body.style.width = ''; body.style.height = ''; body.style.overflow = '';
-            scaleDeck(); // Re-apply correct scale for current viewport
+            scaleDeck();
 
             capStyle.remove();
 
-            logoRestores.forEach(function(r){
+            imgRestores.forEach(function(r){
                 r.img.src = r.src;
-                r.img.crossOrigin = r.co || '';
-                if (!r.co) r.img.removeAttribute('crossorigin');
+                if (r.co !== undefined) r.img.crossOrigin = r.co || '';
             });
 
             loadingEl.classList.remove('active');
