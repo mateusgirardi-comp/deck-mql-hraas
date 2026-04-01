@@ -1842,6 +1842,23 @@
                 break-after: avoid !important;
                 page-break-after: avoid !important;
             }
+
+            /* Kill all animations so elements don't get stuck at opacity:0
+               from their animation "from" keyframe (e.g. cover slide stats bar) */
+            *, *::before, *::after {
+                animation: none !important;
+                animation-fill-mode: none !important;
+                transition: none !important;
+                backdrop-filter: none !important;
+                -webkit-backdrop-filter: none !important;
+            }
+
+            /* Any element with an inline animation style may have started at
+               opacity:0 — force visible */
+            [style*="animation"] {
+                opacity: 1 !important;
+                transform: none !important;
+            }
         }
     </style>
 </head>
