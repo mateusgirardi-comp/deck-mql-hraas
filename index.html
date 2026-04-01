@@ -1669,63 +1669,40 @@
         }
         #pdf-btn svg { flex-shrink: 0; }
 
-        /* === PRINT / PDF === */
-        @media print {
-            @page {
-                size: 1440px 810px landscape;
-                margin: 0;
-            }
-
-            /* Hide ALL UI chrome */
-            #zoom-toolbar,
-            [onclick*="navigate"],
-            [style*="position:fixed"][style*="left:0"],
-            [style*="position:fixed"][style*="right:0"],
-            .fixed.top-6 {
-                display: none !important;
-            }
-
-            /* Reset body/html */
-            html, body {
-                width: 1440px !important;
-                height: 810px !important;
-                overflow: hidden !important;
-                background: white !important;
-            }
-
-            /* Reset deck transform */
-            #deck {
-                transform: none !important;
-                width: 1440px !important;
-                height: 810px !important;
-                position: relative !important;
-            }
-
-            /* Show ALL slides, each on its own page */
-            .slide {
-                display: flex !important;
-                position: absolute !important;
-                width: 1440px !important;
-                height: 810px !important;
-                top: 0 !important;
-                left: 0 !important;
-                page-break-after: always;
-                break-after: page;
-            }
-
-            /* Prevent orphan pages */
-            .slide:last-child {
-                page-break-after: avoid;
-                break-after: avoid;
-            }
-
-            /* Hide modals */
-            #modal-overlay,
-            #team-modal-overlay,
-            #img-modal {
-                display: none !important;
-            }
+        /* PDF loading overlay */
+        #pdf-loading {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(10,10,20,0.75);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            z-index: 99999;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            gap: 16px;
         }
+        #pdf-loading.active { display: flex; }
+        #pdf-loading-card {
+            background: #fff;
+            border-radius: 20px;
+            padding: 32px 48px;
+            text-align: center;
+            box-shadow: 0 24px 64px rgba(0,0,0,0.3);
+            font-family: igualFont, Arial, sans-serif;
+        }
+        #pdf-spinner {
+            width: 40px; height: 40px;
+            border: 3px solid #f3f4f6;
+            border-top-color: #F4364C;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin: 0 auto 16px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        #pdf-progress { font-size: 14px; color: #6b7280; margin-top: 4px; }
+        #pdf-title-text { font-size: 16px; font-weight: 700; color: #111; }
     </style>
 
     <style>
@@ -3310,6 +3287,15 @@ function closeImageModal() {
 }
 document.addEventListener('keydown', function(e) { if(e.key==='Escape') closeImageModal(); });
 </script>
+    <!-- PDF Loading Overlay -->
+    <div id="pdf-loading">
+        <div id="pdf-loading-card">
+            <div id="pdf-spinner"></div>
+            <div id="pdf-title-text">Gerando PDF...</div>
+            <div id="pdf-progress">Preparando slides</div>
+        </div>
+    </div>
+
     <!-- Zoom + PDF Toolbar -->
     <div id="zoom-toolbar">
         <button onclick="zoomOut()" title="Zoom out" aria-label="Zoom out">
@@ -3325,6 +3311,10 @@ document.addEventListener('keydown', function(e) { if(e.key==='Escape') closeIma
             PDF
         </button>
     </div>
+
+    <!-- html2canvas + jsPDF for proper slide-by-slide PDF capture -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 
     <script>
         // === ZOOM CONTROLS ===
@@ -3346,31 +3336,122 @@ document.addEventListener('keydown', function(e) { if(e.key==='Escape') closeIma
             updateZoomLabel();
         }
 
-        // === PDF EXPORT (print-based, vetorial) ===
-        function exportPDF() {
-            const btn = document.getElementById('pdf-btn');
-            btn.textContent = 'Preparando...';
-            btn.disabled = true;
-
-            // Give browser a frame to update UI, then print
-            requestAnimationFrame(function() {
-                requestAnimationFrame(function() {
-                    window.print();
-                    // Restore button after print dialog closes
-                    setTimeout(function() {
-                        btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> PDF';
-                        btn.disabled = false;
-                    }, 1000);
-                });
-            });
-        }
-
         // Keyboard shortcuts
         document.addEventListener('keydown', function(e) {
             if ((e.metaKey || e.ctrlKey) && e.key === '=') { e.preventDefault(); zoomIn(); }
             if ((e.metaKey || e.ctrlKey) && e.key === '-') { e.preventDefault(); zoomOut(); }
             if ((e.metaKey || e.ctrlKey) && e.key === '0') { e.preventDefault(); userZoom = 1.0; scaleDeck(); updateZoomLabel(); }
         });
+
+        // === PDF EXPORT — html2canvas + jsPDF (slide-by-slide) ===
+        async function exportPDF() {
+            const btn = document.getElementById('pdf-btn');
+            const loadingEl = document.getElementById('pdf-loading');
+            const progressEl = document.getElementById('pdf-progress');
+
+            btn.disabled = true;
+            loadingEl.classList.add('active');
+
+            const W = 1440, H = 810;
+            const allSlides = document.querySelectorAll('.slide');
+            const totalSlides = allSlides.length;
+            // Find currently active slide to restore later
+            const originalIdx = Array.from(allSlides).findIndex(s => s.classList.contains('active'));
+
+            // Elements to hide during capture
+            const hideEls = [
+                document.getElementById('zoom-toolbar'),
+                document.getElementById('pdf-loading'),
+                ...document.querySelectorAll('[onclick*="navigate"]'),
+                // hide left/right side nav tap areas
+                ...document.querySelectorAll('[style*="position:fixed"]')
+            ].filter(Boolean);
+
+            const deck = document.getElementById('deck');
+            // Save current deck styles
+            const savedTransform = deck.style.transform;
+            const savedWidth = deck.style.width;
+            const savedHeight = deck.style.height;
+            const savedTOrigin = deck.style.transformOrigin;
+
+            // Reset deck to native size for capture
+            deck.style.transform = 'none';
+            deck.style.width = W + 'px';
+            deck.style.height = H + 'px';
+            deck.style.transformOrigin = 'top left';
+
+            // Hide UI chrome
+            hideEls.forEach(el => { el._pdfDisplay = el.style.display; el.style.display = 'none'; });
+
+            try {
+                const { jsPDF } = window.jspdf;
+                const pdf = new jsPDF({ orientation: 'landscape', unit: 'px', format: [W, H] });
+
+                for (let i = 0; i < totalSlides; i++) {
+                    progressEl.textContent = 'Slide ' + (i + 1) + ' de ' + totalSlides;
+
+                    // Activate this slide only
+                    allSlides.forEach(s => s.classList.remove('active'));
+                    allSlides[i].classList.add('active');
+
+                    // Wait for DOM to settle
+                    await new Promise(r => setTimeout(r, 200));
+
+                    const canvas = await html2canvas(deck, {
+                        scale: 2,          // 2x for crisp quality
+                        useCORS: true,
+                        allowTaint: true,
+                        backgroundColor: null,
+                        width: W,
+                        height: H,
+                        windowWidth: W,
+                        windowHeight: H,
+                        x: 0,
+                        y: 0,
+                        scrollX: 0,
+                        scrollY: 0,
+                        logging: false,
+                        imageTimeout: 15000,
+                        onclone: function(doc) {
+                            // Inside cloned doc: hide chrome elements too
+                            ['zoom-toolbar','pdf-loading'].forEach(function(id) {
+                                var el = doc.getElementById(id);
+                                if (el) el.style.display = 'none';
+                            });
+                            doc.querySelectorAll('[onclick*="navigate"]').forEach(function(el) {
+                                el.style.display = 'none';
+                            });
+                            doc.querySelectorAll('[style*="position:fixed"]').forEach(function(el) {
+                                el.style.display = 'none';
+                            });
+                        }
+                    });
+
+                    const imgData = canvas.toDataURL('image/jpeg', 0.95);
+                    if (i > 0) pdf.addPage([W, H], 'landscape');
+                    pdf.addImage(imgData, 'JPEG', 0, 0, W, H, '', 'FAST');
+                }
+
+                pdf.save('HRaaS-Comp.pdf');
+
+            } catch (err) {
+                console.error('PDF generation error:', err);
+                alert('Erro ao gerar PDF: ' + err.message);
+            }
+
+            // Restore everything
+            allSlides.forEach(s => s.classList.remove('active'));
+            allSlides[originalIdx].classList.add('active');
+            deck.style.transform = savedTransform;
+            deck.style.width = savedWidth;
+            deck.style.height = savedHeight;
+            deck.style.transformOrigin = savedTOrigin;
+            hideEls.forEach(el => { el.style.display = el._pdfDisplay || ''; });
+
+            loadingEl.classList.remove('active');
+            btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> PDF';
+            btn.disabled = false;
+        }
     </script>
 
 </body>
