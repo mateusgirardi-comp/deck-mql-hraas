@@ -3450,19 +3450,47 @@ document.addEventListener('keydown', function(e) { if(e.key==='Escape') closeIma
                         logging: false,
                         imageTimeout: 15000,
                         onclone: function(doc) {
+                            // ── A. Global CSS backup (animation-delay trick) ──
                             var s = doc.createElement('style');
                             s.textContent =
                                 '* { animation-delay:-9999s !important; animation-fill-mode:both !important; ' +
                                 'backdrop-filter:none !important; -webkit-backdrop-filter:none !important; } ' +
                                 'video { opacity:0 !important; }';
                             doc.head.appendChild(s);
-                            CHROME.forEach(function(id){
-                                var el = doc.getElementById(id);
-                                if (el) el.style.display = 'none';
+
+                            // ── B. DIRECT inline-animation fix ───────────────
+                            // html2canvas does not respect !important overrides
+                            // against inline animation shorthand. Must mutate DOM.
+                            // Elements with animation: in inline style start at
+                            // opacity:0 (the 'from' keyframe). Remove the animation
+                            // and explicitly set the final visible state.
+                            doc.querySelectorAll('[style*="animation"]').forEach(function(el) {
+                                el.style.removeProperty('animation');
+                                el.style.removeProperty('-webkit-animation');
+                                el.style.opacity = '1';
+                                // Hero animations also start with translateY — reset it
+                                if (el.style.transform && el.style.transform.indexOf('translate') !== -1) {
+                                    el.style.removeProperty('transform');
+                                }
                             });
-                            doc.querySelectorAll('[style*="position:fixed"]').forEach(function(el){
-                                el.style.display = 'none';
+
+                            // ── C. Hide ALL fixed chrome ──────────────────────
+                            // (a) Nav bar uses Tailwind class 'fixed', not inline style
+                            doc.querySelectorAll('.fixed').forEach(function(el) {
+                                // Only hide chrome outside slides
+                                var p = el.parentElement;
+                                var inSlide = false;
+                                while (p) { if (p.classList && p.classList.contains('slide')) { inSlide = true; break; } p = p.parentElement; }
+                                if (!inSlide) el.style.display = 'none';
                             });
+                            // (b) Nav arrows have inline position:fixed
+                            doc.querySelectorAll('[style*="position:fixed"],[style*="position: fixed"]').forEach(function(el){ el.style.display = 'none'; });
+                            // (c) Known chrome by ID
+                            ['zoom-toolbar','pdf-loading','modal-overlay','team-modal-overlay','img-modal'].forEach(function(id){
+                                var el = doc.getElementById(id); if (el) el.style.display = 'none';
+                            });
+                            // (d) Nav arrows by onclick
+                            doc.querySelectorAll('[onclick*="navigate"]').forEach(function(el){ el.style.display = 'none'; });
                         }
                     });
 
