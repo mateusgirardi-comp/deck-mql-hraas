@@ -3848,14 +3848,31 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
             await new Promise(function(r){ setTimeout(r, 150); });
 
             // ── 4. CAPTURE EACH SLIDE ─────────────────────────────────────────
-            // dom-to-image-more captures only #deck (chrome/nav are siblings
-            // outside the deck, so they're excluded automatically).
+            // Capture one slide at a time: temporarily remove ALL other slides from
+            // the DOM so dom-to-image-more only processes one slide's images/nodes.
+            // This prevents it from hanging on 100+ logos from all slides combined.
+            var stash = document.createElement('div');
+            stash.style.cssText = 'position:fixed;left:-99999px;top:0;visibility:hidden;';
+            document.body.appendChild(stash);
+
             try {
                 var pdf = new window.jspdf.jsPDF({ orientation:'landscape', unit:'px', format:[W, H] });
 
                 for (var i = 0; i < slides.length; i++) {
                     progressEl.textContent = 'Slide ' + (i+1) + ' de ' + slides.length;
-                    slides.forEach(function(s){ s.classList.remove('active'); });
+
+                    // Move every OTHER slide into the stash so dom-to-image-more
+                    // only sees one slide's content (avoids processing 100s of logos)
+                    var stashedItems = [];
+                    slides.forEach(function(s, j) {
+                        s.classList.remove('active');
+                        if (j !== i) {
+                            var anchor = document.createComment('slide-stash-' + j);
+                            deck.insertBefore(anchor, s);
+                            stash.appendChild(s);
+                            stashedItems.push({ slide: s, anchor: anchor });
+                        }
+                    });
                     slides[i].classList.add('active');
 
                     // Slide 3: recalculate JS-positioned center arrow
@@ -3882,7 +3899,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
                             height: H,
                             scale: 2,
                             bgcolor: '#ffffff',
-                            httpTimeout: 4000, // fail fast on any remaining XHR
+                            httpTimeout: 4000,
                             style: {
                                 transform: 'none',
                                 width: W + 'px',
@@ -3894,13 +3911,25 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
                         })
                     ]);
 
+                    // Restore stashed slides back to their original positions
+                    stashedItems.forEach(function(item) {
+                        deck.insertBefore(item.slide, item.anchor);
+                        item.anchor.parentNode.removeChild(item.anchor);
+                    });
+
                     if (i > 0) pdf.addPage([W, H], 'landscape');
                     pdf.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, W, H, '', 'FAST');
                 }
 
+                stash.parentNode.removeChild(stash);
                 pdf.save('HRaaS-Comp.pdf');
 
             } catch(err) {
+                // Restore all stashed slides on error
+                try {
+                    Array.from(stash.children).forEach(function(s) { deck.appendChild(s); });
+                    stash.parentNode && stash.parentNode.removeChild(stash);
+                } catch(e2) {}
                 console.error('PDF error:', err);
                 alert('Erro ao gerar PDF: ' + err.message);
             }
