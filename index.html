@@ -3403,6 +3403,21 @@ document.addEventListener('keydown', function(e) { if(e.key==='Escape') closeIma
                 } catch(e) { console.warn('Image proxy failed', origSrc, e.message); }
             }));
 
+            // ── 1b. PRE-LOAD CUSTOM FONT AS DATA URL ──────────────────────────
+            // igualFont lives on comp.vc which may block SVG foreignObject context.
+            // Pre-fetching it as a data: URL and injecting an @font-face ensures
+            // dom-to-image-more can inline it without CORS issues.
+            progressEl.textContent = 'Carregando fonte...';
+            var fontDataUrl = null;
+            try {
+                var fontUrl = 'https://comp.vc/_next/static/media/IgualVariable-s.p.f254b355.woff2';
+                var fontResp = await fetch(fontUrl, { mode: 'cors', signal: AbortSignal.timeout(8000) });
+                if (fontResp.ok) {
+                    fontDataUrl = await blobToDataURL(await fontResp.blob());
+                    console.log('igualFont pre-loaded as data URL, size:', fontDataUrl.length);
+                }
+            } catch(e) { console.warn('igualFont fetch failed, using fallback:', e.message); }
+
             // ── 2. FORCE EXACT 1440×810 LAYOUT ───────────────────────────────
             deck.style.transform = 'none';
             deck.style.width = W + 'px';
@@ -3411,12 +3426,20 @@ document.addEventListener('keydown', function(e) { if(e.key==='Escape') closeIma
             html.style.width = W + 'px'; html.style.height = H + 'px'; html.style.overflow = 'hidden';
             body.style.width = W + 'px'; body.style.height = H + 'px'; body.style.overflow = 'hidden';
 
-            // ── 3. KILL ANIMATIONS + VIDEO ────────────────────────────────────
+            // ── 3. KILL ANIMATIONS + VIDEO + INJECT FONT ─────────────────────
             var capStyle = document.createElement('style');
-            capStyle.textContent =
+            var capStyleText =
                 '* { animation:none !important; transition:none !important; ' +
                 '    backdrop-filter:none !important; -webkit-backdrop-filter:none !important; } ' +
                 'video { display:none !important; }';
+            if (fontDataUrl) {
+                // Inject font as data URL so SVG foreignObject context can use it
+                capStyleText +=
+                    '@font-face { font-family: "igualFont"; ' +
+                    '  src: url("' + fontDataUrl + '") format("woff2"); ' +
+                    '  font-weight: 100 900; font-style: normal; font-display: block; }';
+            }
+            capStyle.textContent = capStyleText;
             document.head.appendChild(capStyle);
 
             // Strip animation from inline style attributes and ensure opacity:1
